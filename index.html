@@ -344,21 +344,35 @@
                 </div>
             </section>
 
-            <!-- 3) BLOCKCHAIN -->
+            <!-- 3) BLOCKCHAIN (con pares) -->
             <section id="sec-chain" class="card">
-                <h2>3) Blockchain</h2>
-                <p>Crea una cadena, añade bloques minados y verifica su integridad. Puedes <em>trucar</em> un bloque
-                    para ver cómo se invalida la cadena.</p>
-                <div class="row">
-                    <button id="btn-chain-new" class="primary">Nueva cadena</button>
-                    <button id="btn-chain-add" class="good">Añadir bloque (desde sección Bloque)</button>
-                    <button id="btn-chain-validate">Validar cadena</button>
-                    <button id="btn-chain-tamper" class="warn">Trucar bloque #1</button>
-                    <span class="badge" id="chain-status">Estado: —</span>
+                <h2>3) Blockchain por pares</h2>
+                <p>
+                    Crea bloques en <strong>Par A</strong> y pulsa <em>Añadir Par</em> para clonar el par anterior
+                    (Par B, Par C, …). Una vez copiado, cada par es completamente independiente.
+                </p>
+                <div class="row" style="align-items:center;gap:8px">
+                    <button id="btn-pair-add" class="primary">Añadir Par</button>
+
+                    <!-- Controles de zoom -->
+                    <div class="row" style="margin-left:auto;align-items:center;gap:6px">
+                        <button id="btn-zoom-out" title="Desampliar"
+                            style="width:36px;padding:6px 0;font-weight:700">−</button>
+                        <span class="pill" id="zoom-label">100%</span>
+                        <button id="btn-zoom-in" title="Ampliar"
+                            style="width:36px;padding:6px 0;font-weight:700">+</button>
+                    </div>
                 </div>
+
                 <div class="hr"></div>
-                <div id="chain-view" class="list"></div>
+                <!-- Contenedor horizontal de pares -->
+                <div id="pairs-container" class="list"
+                    style="display:grid;grid-auto-flow:column;grid-auto-columns:640px;gap:16px;overflow-x:auto;overflow-y:hidden;padding-bottom:6px;">
+                </div>
+
             </section>
+
+
 
             <!-- 4) RED DISTRIBUIDA -->
             <section id="sec-net" class="card">
@@ -743,57 +757,352 @@
 
 
 
-        // -------- UI: Blockchain --------
-        async function renderChain() {
-            const wrap = el('chain-view');
-            wrap.innerHTML = '';
-            for (const b of chain.chain) {
-                const d = document.createElement('details');
-                d.innerHTML = `<summary>#${b.index} — ${b.hash.slice(0, 16)}… <span class="badge" style="margin-left:6px">prev ${b.previousHash.slice(0, 10)}…</span></summary>
-          <div class='list small'>
-            <div><strong>Timestamp:</strong> ${b.timestamp}</div>
-            <div><strong>Dificultad:</strong> ${b.difficulty}</div>
-            <div><strong>Nonce:</strong> ${b.nonce}</div>
-            <div><strong>TXs:</strong> <pre class='mono small'>${JSON.stringify(b.transactions, null, 2)}</pre></div>
-          </div>`;
-                wrap.appendChild(d);
+        // -------- UI: Blockchain por pares (clonación e independencia) --------
+        (() => {
+            const ZERO64 = '0'.repeat(64);
+            const pairsWrap = el('pairs-container');
+            const btnAddPair = el('btn-pair-add');
+            // --- Zoom +/− de la vista de pares ---
+            // Rango y paso de zoom (puedes ajustarlo)
+            let zoom = 1;
+            const ZMIN = 0.2, ZMAX = 1.5, ZSTEP = 0.1;
+
+            function clamp(n, a, b) { return Math.min(b, Math.max(a, n)); }
+            function applyZoom() {
+                // Nota: 'zoom' no es estándar pero funciona muy bien en Chrome/Edge/Safari.
+                // Si necesitas compatibilidad total (Firefox), te preparo un fallback.
+                pairsWrap.style.zoom = String(zoom);
+                const label = el('zoom-label');
+                if (label) label.textContent = Math.round(zoom * 100) + '%';
             }
-        }
-        renderChain();
 
-        el('btn-chain-new').addEventListener('click', async () => {
-            chain = new Blockchain({ difficulty: Number(el('blk-diff').value) || 3, reward: Number(el('tx-reward').value) || 50 });
-            await chain.createGenesis();
-            el('chain-status').textContent = 'Estado: Nueva cadena';
-            renderChain();
-        });
+            // Botones +/−
+            const btnZoomIn = el('btn-zoom-in');
+            const btnZoomOut = el('btn-zoom-out');
 
-        el('btn-chain-add').addEventListener('click', async () => {
-            const b = readBlockInputs();
-            // ajusta prevHash y dificultad a la cadena actual
-            b.previousHash = chain.last.hash;
-            b.difficulty = chain.difficulty;
-            await b.mine();
-            chain.chain.push(b);
-            el('chain-status').textContent = 'Bloque añadido';
-            renderChain();
-        });
+            btnZoomIn?.addEventListener('click', () => {
+                zoom = clamp(+(zoom + ZSTEP).toFixed(2), ZMIN, ZMAX);
+                applyZoom();
+            });
+            btnZoomOut?.addEventListener('click', () => {
+                zoom = clamp(+(zoom - ZSTEP).toFixed(2), ZMIN, ZMAX);
+                applyZoom();
+            });
 
-        el('btn-chain-validate').addEventListener('click', async () => {
-            const ok = await chain.isValid();
-            el('chain-status').textContent = ok ? '✅ Cadena válida' : '❌ Cadena inválida';
-        });
+            // Opcional: Ctrl + rueda (solo si te apetece)
+            // pairsWrap.addEventListener('wheel', (e) => {
+            //   if (!e.ctrlKey) return;
+            //   e.preventDefault();
+            //   zoom = clamp(+(zoom + (e.deltaY < 0 ? ZSTEP : -ZSTEP)).toFixed(2), ZMIN, ZMAX);
+            //   applyZoom();
+            // }, { passive: false });
 
-        el('btn-chain-tamper').addEventListener('click', async () => {
-            if (chain.chain[1]) {
-                chain.chain[1].transactions.push({ trucado: true, by: 'usuario' });
-                chain.chain[1].hash = 'x'.repeat(64); // rompe el hash
-                renderChain();
-                el('chain-status').textContent = 'Se trucó el bloque #1. Valida de nuevo para ver el fallo.';
-            } else {
-                el('chain-status').textContent = 'No hay bloque #1 aún.';
+            applyZoom(); // inicial
+
+
+            // Utilidad: 0->A, 1->B, … 25->Z, 26->AA, etc.
+            function letters(n) {
+                n = Number(n) || 0;
+                let s = ''; n++;
+                while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+                return s;
             }
-        });
+
+            // --------- Componente tarjeta de bloque (reutilizable por par) ---------
+            function makeBlockCard({ index, prevHash, defaultDifficulty, initialTimestamp, snapshot } = {}) {
+                const wrap = document.createElement('div');
+                wrap.className = 'node';
+                wrap.style.padding = '12px';
+                wrap.innerHTML = `
+      <div class="cols-2">
+        <div class="list">
+          <label>Datos (JSON libre)</label>
+          <textarea class="data" rows="6">{\"mensaje\":\"hola blockchain\"}</textarea>
+          <div class="cols-3">
+            <div>
+              <label class="small muted">Índice</label>
+              <input class="index" type="number" />
+            </div>
+            <div>
+              <label class="small muted">Prev. Hash</label>
+              <input class="prev" />
+            </div>
+            <div>
+              <label class="small muted">Dificultad</label>
+              <input class="diff" type="number" min="1" max="64" />
+            </div>
+          </div>
+          <div class="row">
+            <button class="mine good">Minar</button>
+            <button class="stop bad">Parar</button>
+          </div>
+        </div>
+        <div class="list">
+          <label class="small muted">Nonce</label>
+          <input class="nonce" type="number" value="0" />
+          <label class="small muted">Timestamp</label>
+          <input class="time" />
+          <label class="small muted">Hash</label>
+          <pre class="hash mono"></pre>
+          <div class="row kpi">
+            <span class="badge status">❌ No Minado</span>
+            <div class="row small indicator" style="display:none;align-items:center;gap:8px">
+              <svg width="18" height="18" viewBox="0 0 50 50" aria-hidden="true">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="6" opacity="0.25" />
+                <path fill="currentColor" d="M25 5a20 20 0 0 1 20 20h-6a14 14 0 0 0-14-14V5z">
+                  <animateTransform attributeName="transform" type="rotate" from="0 25 25"
+                    to="360 25 25" dur="0.9s" repeatCount="indefinite" />
+                </path>
+              </svg>
+              <span>Minando…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+                // Refs
+                const refs = {
+                    data: wrap.querySelector('.data'),
+                    index: wrap.querySelector('.index'),
+                    prev: wrap.querySelector('.prev'),
+                    diff: wrap.querySelector('.diff'),
+                    mine: wrap.querySelector('.mine'),
+                    stop: wrap.querySelector('.stop'),
+                    nonce: wrap.querySelector('.nonce'),
+                    time: wrap.querySelector('.time'),
+                    hash: wrap.querySelector('.hash'),
+                    indicator: wrap.querySelector('.indicator'),
+                    status: wrap.querySelector('.status'),
+                };
+
+                // Visual del estado de minado
+                function setCardVisual(mined) {
+                    refs.status.textContent = mined ? '✅ Minado' : '❌ No Minado';
+                    refs.status.style.background = mined ? 'var(--ok)' : 'var(--bad)';
+                    refs.status.style.borderColor = mined ? 'var(--ok)' : 'var(--bad)';
+                    refs.status.style.color = '#fff';
+                    if (mined) {
+                        wrap.style.borderColor = 'var(--ok)';
+                        wrap.style.boxShadow = '0 10px 35px rgba(16,185,129,0.25)';
+                        wrap.style.background = 'linear-gradient(180deg, #0f1f19, #0a1512)';
+                    } else {
+                        wrap.style.borderColor = 'var(--bad)';
+                        wrap.style.boxShadow = '0 10px 35px rgba(239,68,68,0.25)';
+                        wrap.style.background = 'linear-gradient(180deg, #1f0f12, #150a0c)';
+                    }
+                }
+
+                // Init campos (o desde snapshot)
+                if (snapshot) {
+                    refs.index.value = Number(snapshot.index);
+                    refs.prev.value = snapshot.prev || ZERO64;
+                    refs.diff.value = Number(snapshot.diff ?? 3);
+                    refs.nonce.value = Number(snapshot.nonce ?? 0);
+                    refs.time.value = snapshot.time || nowISO();
+                    refs.data.value = snapshot.data ?? '';
+                } else {
+                    refs.index.value = Number(index ?? 1);
+                    refs.prev.value = prevHash || ZERO64;
+                    refs.diff.value = Number(defaultDifficulty ?? 3);
+                    refs.nonce.value = 0;
+                    refs.time.value = initialTimestamp || nowISO();
+                }
+
+                // index/prev no editables (se calculan por posición)
+                refs.index.readOnly = true;
+                refs.prev.readOnly = true;
+
+                // Helpers
+                let localVersion = 0;
+                let stopMining = false;
+                let notify = async () => { }; // lo conectaremos desde fuera (para cascada en el par)
+
+                function localGetDifficulty() {
+                    let v = parseInt(refs.diff.value, 10);
+                    if (!Number.isFinite(v)) v = 1;
+                    v = Math.max(1, Math.min(64, v));
+                    if (String(v) !== String(refs.diff.value)) refs.diff.value = v;
+                    return v;
+                }
+
+                function localPayload() {
+                    return JSON.stringify({
+                        index: Number(refs.index.value || 1),
+                        timestamp: refs.time.value || nowISO(),
+                        data: refs.data.value ?? '',
+                        previousHash: refs.prev.value || ZERO64,
+                        nonce: Number(refs.nonce.value || 0),
+                    });
+                }
+
+                async function recompute() {
+                    const myVer = ++localVersion;
+                    refs.hash.textContent = 'calculando…';
+                    const h = await sha256(localPayload());
+                    if (myVer !== localVersion) return h;
+                    refs.hash.textContent = h;
+                    const mined = meetsDifficulty(h, localGetDifficulty());
+                    setCardVisual(mined);
+                    return h;
+                }
+
+                function showMining(show) { refs.indicator.style.display = show ? 'flex' : 'none'; }
+
+                // Eventos: cualquier cambio -> recomputa y notifica cascada
+                [refs.data, refs.index, refs.prev, refs.nonce, refs.time].forEach(n => {
+                    n.addEventListener('input', async () => { await recompute(); await notify(); });
+                });
+                // La dificultad no cambia el hash, pero sí el estado “Minado/No Minado”
+                refs.diff.addEventListener('input', async () => { await recompute(); await notify(); });
+
+                refs.stop.addEventListener('click', () => { stopMining = true; showMining(false); });
+
+                refs.mine.addEventListener('click', async () => {
+                    stopMining = false; showMining(true);
+                    const idx = Number(refs.index.value || 1);
+                    const ts = refs.time.value || nowISO();
+                    const prev = refs.prev.value || ZERO64;
+                    let nonce = Number(refs.nonce.value || 0);
+                    const d = localGetDifficulty();
+                    const target = '0'.repeat(d);
+                    const dataRaw = refs.data.value ?? '';
+
+                    let attempts = 0;
+                    while (!stopMining) {
+                        const payload = JSON.stringify({ index: idx, timestamp: ts, data: dataRaw, previousHash: prev, nonce });
+                        const h = await sha256(payload);
+                        if (h.startsWith(target)) {
+                            refs.nonce.value = nonce;
+                            refs.hash.textContent = h;
+                            setCardVisual(true);
+                            showMining(false);
+                            await notify(); // propaga
+                            return;
+                        }
+                        nonce++; attempts++; if (attempts % 500 === 0) await sleep(0);
+                    }
+                    showMining(false);
+                    await recompute();
+                    await notify();
+                });
+
+                // Estado inicial
+                setCardVisual(false);
+                // Si venimos de snapshot quizá ya estaba minado: recalculamos para pintar consistente
+                recompute();
+
+                return {
+                    wrap,
+                    refs,
+                    recompute,
+                    get hash() { return (refs.hash.textContent || '').trim(); },
+                    setNotify(fn) { notify = fn; }
+                };
+            }
+            // ----------------------------------------------------------------------
+
+            // Estructura de pares
+            const pairs = []; // { name, col, refs, cards, cascadeFrom }
+
+            function makePair(fromPair = null) {
+                const idx = pairs.length;
+                const name = 'Par ' + letters(idx);
+
+                const col = document.createElement('div');
+                col.className = 'node';
+                col.style.padding = '12px';
+                col.style.minWidth = '640px'; // mismo valor que en grid-auto-columns
+                col.innerHTML = `
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <strong>${name}</strong>
+        <button class="primary add-block">Añadir bloque</button>
+      </div>
+      <div class="hr"></div>
+      <div class="list blocks"></div>
+    `;
+
+                const refs = {
+                    addBlock: col.querySelector('.add-block'),
+                    blocks: col.querySelector('.blocks'),
+                };
+
+                const cards = [];
+
+                async function cascadeFrom(startIdx) {
+                    for (let i = startIdx; i < cards.length; i++) {
+                        const prevH = cards[i - 1].hash || ZERO64;
+                        cards[i].refs.prev.value = prevH;
+                        await cards[i].recompute();
+                    }
+                }
+
+                function connectNotifies() {
+                    cards.forEach(c => c.setNotify(async () => {
+                        const pos = cards.indexOf(c);
+                        await cascadeFrom(pos + 1);
+                    }));
+                }
+
+                // Añadir bloque manual en este par
+                refs.addBlock.addEventListener('click', async () => {
+                    let prevHash = ZERO64;
+                    if (cards.length > 0) {
+                        await cards[cards.length - 1].recompute();
+                        prevHash = cards[cards.length - 1].hash || ZERO64;
+                    }
+                    const creationTs = nowISO();
+                    const defaultDiff = Number(el('blk-diff')?.value || 3); // reusa el selector de dificultad del bloque de la sección 2
+                    const card = makeBlockCard({
+                        index: cards.length + 1,
+                        prevHash,
+                        defaultDifficulty: defaultDiff,
+                        initialTimestamp: creationTs
+                    });
+                    refs.blocks.appendChild(card.wrap);
+                    cards.push(card);
+                    connectNotifies();
+                });
+
+                // Si hay par de origen: clonar todos sus bloques
+                if (fromPair && Array.isArray(fromPair.cards)) {
+                    (async () => {
+                        for (const src of fromPair.cards) {
+                            const snap = {
+                                index: Number(src.refs.index.value),
+                                data: src.refs.data.value,
+                                prev: src.refs.prev.value,
+                                diff: Number(src.refs.diff.value),
+                                nonce: Number(src.refs.nonce.value),
+                                time: src.refs.time.value,
+                            };
+                            const card = makeBlockCard({ snapshot: snap });
+                            refs.blocks.appendChild(card.wrap);
+                            cards.push(card);
+                            await card.recompute(); // pinta hash/estado coherente
+                        }
+                        connectNotifies();
+                    })();
+                }
+
+                const pair = { name, col, refs, cards, cascadeFrom };
+                pairs.push(pair);
+                pairsWrap.appendChild(col);
+                return pair;
+            }
+
+            // Botón global: clona el último par (si no hay, crea Par A vacío)
+            btnAddPair.addEventListener('click', () => {
+                const last = pairs[pairs.length - 1] || null;
+                makePair(last || null);
+            });
+
+            // Inicio: crea Par A vacío
+            makePair(null);
+        })();
+
+
+
 
         // -------- UI: Red distribuida --------
         function nodeCard(i) {
