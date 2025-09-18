@@ -459,7 +459,24 @@
                     <div class="pill">Dificultad fija: 3</div>
                 </div>
                 <div class="cols-3">
-                    <div class="node">
+                    <!-- ORDEN NUEVO: 1) MINAR 2) CREAR TX 3) BALANCES -->
+                    <div class="node" id="cb-box-mine">
+                        <div class="row" style="justify-content:space-between;align-items:center">
+                            <strong>Minar bloque</strong><span class="badge small">⛏️</span>
+                        </div>
+                        <div class="list">
+                            <label class="small muted">Minero (cobra la coinbase)</label><input id="cb-miner"
+                                placeholder="TuNombre" />
+                            <button id="cb-btn-mine" class="good">Minar (coinbase + mempool)</button>
+                            <div id="cb-mine-status" class="small muted"></div>
+                            <details>
+                                <summary>Último bloque</summary>
+                                <pre id="cb-lastblock" class="mono small"></pre>
+                            </details>
+                        </div>
+                    </div>
+
+                    <div class="node" id="cb-box-create-tx">
                         <div class="row" style="justify-content:space-between;align-items:center">
                             <strong>Crear transacción</strong><span class="badge small">Mempool</span>
                         </div>
@@ -477,30 +494,18 @@
                             </div>
                         </div>
                     </div>
-                    <div class="node">
-                        <div class="row" style="justify-content:space-between;align-items:center">
-                            <strong>Minar bloque</strong><span class="badge small">⛏️</span>
-                        </div>
-                        <div class="list">
-                            <label class="small muted">Minero (cobra la coinbase)</label><input id="cb-miner"
-                                placeholder="TuNombre" />
-                            <button id="cb-btn-mine" class="good">Minar (coinbase + mempool)</button>
-                            <div id="cb-mine-status" class="small muted"></div>
-                            <details>
-                                <summary>Último bloque</summary>
-                                <pre id="cb-lastblock" class="mono small"></pre>
-                            </details>
-                        </div>
-                    </div>
-                    <div class="node">
+
+                    <div class="node" id="cb-box-balances">
                         <div class="row" style="justify-content:space-between;align-items:center">
                             <strong>Balances</strong><span class="badge small">Σ</span>
                         </div>
                         <div class="list">
-                            <button id="cb-btn-balances">Recalcular balances</button>
+                            <button id="cb-btn-balances">Calcular balances</button>
                             <div class="scroll">
                                 <pre id="cb-balances" class="mono small"></pre>
                             </div>
+                            <div class="small muted">Nota: se muestran balances confirmados y también una proyección que
+                                incluye las transacciones en el mempool.</div>
                         </div>
                     </div>
                 </div>
@@ -542,13 +547,36 @@
             }
             get last() { return this.chain[this.chain.length - 1] }
             balances() { const bal = {}; for (const b of this.chain) { for (const tx of b.transactions || []) { if (tx.coinbase) { bal[tx.to] = (bal[tx.to] || 0) + Number(tx.amount || 0) } else { const a = Number(tx.amount || 0); if (tx.from) bal[tx.from] = (bal[tx.from] || 0) - a; if (tx.to) bal[tx.to] = (bal[tx.to] || 0) + a } } } return bal }
-            canSpend(addr, amount) { const bal = this.balances(); return (bal[String(addr).trim()] || 0) >= Number(amount || 0) }
+            // NUEVO: saldo efectivo considerando el mempool (para evitar sobre-gasto al crear TX)
+            effectiveBalanceOf(addr) {
+                addr = String(addr || '').trim();
+                const bal = this.balances();
+                let base = bal[addr] || 0;
+                for (const tx of this.mempool) {
+                    if (!tx.coinbase && String(tx.from || '').trim() === addr) {
+                        base -= Number(tx.amount || 0);
+                    }
+                }
+                return base;
+            }
+            canSpend(addr, amount) { return this.effectiveBalanceOf(addr) >= Number(amount || 0) }
             _validateBundle(allTxs) {
                 const bal = this.balances(); for (const tx of allTxs) {
                     if (tx.coinbase) { bal[tx.to] = (bal[tx.to] || 0) + Number(tx.amount || 0); continue }
                     const from = String(tx.from || '').trim(); const to = String(tx.to || '').trim(); const amt = Number(tx.amount || 0);
                     if (!from || !to || !(amt > 0)) throw new Error('TX inválida'); if ((bal[from] || 0) < amt) throw new Error(`Saldo insuficiente en ${from}`); bal[from] -= amt; bal[to] = (bal[to] || 0) + amt
                 }
+            }
+            // NUEVO: proyección de balances incluyendo mempool (para mostrar en UI)
+            projectedBalances() {
+                const bal = this.balances();
+                for (const tx of this.mempool) {
+                    if (tx.coinbase) continue;
+                    const from = String(tx.from || '').trim(); const to = String(tx.to || '').trim(); const amt = Number(tx.amount || 0);
+                    if (!from || !to || !(amt > 0)) continue;
+                    if ((bal[from] || 0) >= amt) { bal[from] = (bal[from] || 0) - amt; bal[to] = (bal[to] || 0) + amt; }
+                }
+                return bal;
             }
             async addBlockFrom({ transactions, miner }) {
                 const mem = [...(transactions || this.mempool)]; mem.unshift({ coinbase: true, from: ZERO_ADDR, to: miner, amount: this.reward }); this._validateBundle(mem);
@@ -842,21 +870,31 @@
             (async () => { await makePair(null) })();
         })();
 
-        // ---- Sección 4) Coinbase ----
+        // ---- Sección 4) Coinbase (mejorada) ----
         const cbChain = new Blockchain({ difficulty: 3, reward: 50, premine: { to: 'Alice', amount: 1_000_000 } });
         function cbRenderMempool() { el('cb-mempool').textContent = JSON.stringify(cbChain.mempool, null, 2) }
-        function cbRenderBalances() { const bal = cbChain.balances(); const rows = Object.keys(bal).sort().map(k => `${k}: ${bal[k]}`); el('cb-balances').textContent = rows.join('\n') || '(sin movimientos aún)' }
+        function cbRenderBalances() {
+            const confirmed = cbChain.balances();
+            const projected = cbChain.projectedBalances();
+            const keys = Array.from(new Set([...Object.keys(confirmed), ...Object.keys(projected)])).sort();
+            const rows = keys.map(k => {
+                const c = confirmed[k] || 0;
+                const p = projected[k] || 0;
+                return `${k}: ${c} (confirmadas) | ${p} (incl. mempool)`;
+            });
+            el('cb-balances').textContent = rows.join('\\n') || '(sin movimientos aún)';
+        }
         function cbRenderLastBlock() { const b = cbChain.last || null; el('cb-lastblock').textContent = b ? JSON.stringify({ index: b.index, ts: b.timestamp, txs: b.transactions, prev: b.previousHash.slice(0, 16) + '…', hash: b.hash }, null, 2) : '(sin bloques)' }
         el('cb-reward').addEventListener('input', () => { const v = Number(el('cb-reward').value || 50); cbChain.reward = v > 0 ? v : 50 });
         el('cb-btn-add').addEventListener('click', () => {
             const from = el('cb-from').value.trim(); const to = el('cb-to').value.trim(); const amt = Number(el('cb-amount').value || 0);
             if (!from || !to || !(amt > 0)) { alert('Completa emisor, receptor y cantidad > 0'); return }
-            if (!cbChain.canSpend(from, amt)) { alert(`Saldo insuficiente en ${from}. Mina primero o corrige la cantidad.`); return }
-            cbChain.mempool.push({ from, to, amount: amt }); cbRenderMempool();
+            if (!cbChain.canSpend(from, amt)) { alert(`Saldo insuficiente en ${from}. Considera minar o reduce la cantidad. (Se tiene en cuenta el mempool)`); return }
+            cbChain.mempool.push({ from, to, amount: amt }); cbRenderMempool(); cbRenderBalances();
         });
         el('cb-btn-mine').addEventListener('click', async () => {
             const miner = (el('cb-miner').value || '').trim() || 'miner'; el('cb-mine-status').textContent = 'Minando…';
-            try { const b = await cbChain.addBlockFrom({ transactions: cbChain.mempool, miner }); el('cb-mine-status').textContent = `Bloque #${b.index} minado. Recompensa para ${miner}. Hash ${b.hash.slice(0, 12)}…` }
+            try { const b = await cbChain.addBlockFrom({ transactions: cbChain.mempool, miner }); el('cb-mine-status').textContent = `Bloque #${b.index} minado. ${cbChain.reward} BTC para ${miner}. Hash ${b.hash.slice(0, 12)}…` }
             catch (e) { el('cb-mine-status').textContent = 'Error: ' + e.message }
             cbRenderMempool(); cbRenderBalances(); cbRenderLastBlock();
         });
@@ -867,7 +905,7 @@
         function refreshNodeSelect() { const sel = el('tx-node'); if (!sel) return; sel.innerHTML = '';['Nodo 1', 'Nodo 2', 'Nodo 3'].forEach((lab, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = lab; sel.appendChild(o) }) }
         refreshNodeSelect();
         function renderMempool() { const n = nodes[Number(el('tx-node')?.value || 0)]; if (!n) return; el('mempool-view').textContent = JSON.stringify(n.mempool, null, 2) }
-        function renderBalances() { const n = nodes[Number(el('tx-node')?.value || 0)]; if (!n) return; const bal = n.balances(); const rows = Object.keys(bal).sort().map(k => `${k}: ${bal[k]}`); el('balances-view').textContent = rows.join('\n') || '(sin movimientos aún)' }
+        function renderBalances() { const n = nodes[Number(el('tx-node')?.value || 0)]; if (!n) return; const bal = n.balances(); const rows = Object.keys(bal).sort().map(k => `${k}: ${bal[k]}`); el('balances-view').textContent = rows.join('\\n') || '(sin movimientos aún)' }
         el('tx-node')?.addEventListener('change', () => { renderMempool(); renderBalances() });
         el('btn-tx-add')?.addEventListener('click', () => {
             const n = nodes[Number(el('tx-node').value || 0)];
